@@ -19,7 +19,7 @@ function App() {
   const [ignoreCase, setIgnoreCase] = useState(false)
   const [glob, setGlob] = useState('')
 
-  const repositoryUrl = 'https://github.com/IanBedard/regex-sweep'
+  const repositoryUrl = 'https://github.com/IanBedard/RegexSweeper'
 
   const validPatterns = patterns.map(p => p.value.trim()).filter(Boolean)
   const command = useMemo(() => {
