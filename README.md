@@ -1,79 +1,107 @@
 # Regex Sweep
 
-Regex Sweep is a local-first React application for building a safe Bash command that searches files using one or more regular expressions and returns newline-delimited JSON.
+Regex Sweep is a local-first desktop app for scanning a folder with one or more regular expressions and exporting the matches to a JSON file.
+
+It is built with Tauri, React, and Rust. The app does the file search and JSON writing itself, so people using the packaged app do not need `ripgrep`, `jq`, Bash, Node.js, Rust, or Cargo installed.
 
 ## How it works
 
-1. Enter one or more regular expressions. Use **Add another pattern** to search for several patterns in one sweep.
-2. Paste optional sample text into **Test string**. The app evaluates the patterns in the browser and previews the matches; it does not read local files.
-3. Enter the folder that Bash should search.
-4. Optionally choose advanced search flags.
-5. Select **Generate command**, copy the result, and run it in Bash.
+1. Add one or more regex patterns.
+2. Use the optional test string panel to preview matches before scanning files.
+3. Choose a folder to search.
+4. Adjust advanced options if needed.
+5. Click **Export JSON** and choose where to save the results.
 
-The generated pipeline has two stages:
+Regex Sweep sends the selected folder, patterns, and options to the bundled Rust backend. The backend walks the folder, applies the regex patterns to readable text files, collects match metadata, and writes one JSON file at the location you choose.
 
-```text
-ripgrep searches the files and emits structured events
-                         |
-                         v
-jq selects match events and produces compact JSON objects
-```
+## JSON output
 
-Each output line resembles:
+The exported file is a JSON array. Each object includes the matched file, the regex pattern that matched, the matched text, and its location in the file.
 
 ```json
-{"path":"src/config.ts","regex":"password = secret"}
-```
-
-The output is NDJSON: one valid JSON object per line. This format is convenient for streaming, logging, and processing large result sets.
-
-## What “safely shell-escaped” means
-
-Folder paths and patterns can contain spaces, quotes, dollar signs, or other characters that Bash normally interprets. Regex Sweep wraps and escapes those values so Bash passes them to `rg` as data instead of treating them as additional shell syntax.
-
-Always review a generated command before running it. The app generates commands locally but does not execute them.
-
-## Requirements
-
-- Node.js 20 or newer for the web application
-- [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) for searching files
-- [jq](https://jqlang.org/) for transforming matches into JSON
-- Bash or a Bash-compatible shell for running the generated command
-
-Example installations:
-
-```bash
-# macOS
-brew install ripgrep jq
-
-# Ubuntu/Debian
-sudo apt install ripgrep jq
-
-# Windows with Chocolatey (run the generated command in Git Bash or WSL)
-choco install ripgrep jq
+[
+  {
+    "path": "src/config.ts",
+    "pattern": "password\\s*[=:]\\s*[^\\s]+",
+    "match": "password = secret",
+    "line": 12,
+    "startColumn": 1,
+    "endColumn": 18
+  }
+]
 ```
 
 ## Advanced options
 
-- **Include hidden files** adds `--hidden`. Files such as `.env` may then be searched, while ripgrep's ignore rules still apply.
-- **Ignore letter case** adds `--ignore-case`.
-- **File glob** adds `--glob`, allowing filters such as `*.ts`, `*.json`, or `!node_modules/**`.
+- **Include hidden files** searches dotfiles and hidden folders while still respecting ignore rules.
+- **Ignore letter case** applies case-insensitive matching to both preview and export.
+- **File glob** limits the files searched, such as `*.ts` or `*.json`.
+- Prefix a glob with `!` to exclude files, such as `!node_modules/**`.
 
-## Run locally
+## Using the app
+
+Download or build the desktop bundle for your operating system, then open Regex Sweep like a normal app.
+
+On macOS, a production build creates:
+
+```text
+src-tauri/target/release/bundle/macos/Regex Sweep.app
+src-tauri/target/release/bundle/dmg/Regex Sweep_0.1.0_aarch64.dmg
+```
+
+On Windows, a production build creates Windows installers from a Windows build machine, typically under:
+
+```text
+src-tauri/target/release/bundle/msi/
+src-tauri/target/release/bundle/nsis/
+```
+
+The packaged app is self-contained. Runtime terminal tools are not required.
+
+## Windows deployment
+
+Yes, Regex Sweep can be deployed on Windows. Build it on a Windows machine or in a Windows GitHub Actions runner with Node.js, Rust, and the Tauri Windows prerequisites installed.
+
+Windows users who install the packaged app do not need developer tools. Tauri uses Microsoft WebView2, which is already installed on many current Windows systems; otherwise the installer can prompt for it depending on the bundle configuration.
+
+## Development
+
+Install JavaScript dependencies:
 
 ```bash
 npm install
+```
+
+Run the Tauri desktop app in development mode:
+
+```bash
 npm run dev
 ```
 
-Open the local URL printed by Vite. To create a production bundle:
+Build the production desktop app:
 
 ```bash
 npm run build
 ```
 
+Build only the web frontend:
+
+```bash
+npm run build:web
+```
+
+## Developer requirements
+
+These are only required to develop or build Regex Sweep from source:
+
+- Node.js 20.19 or newer
+- Rust and Cargo
+- Tauri platform prerequisites for your operating system
+
 ## Technology
 
+- Tauri
+- Rust
 - React
 - TypeScript
 - Vite
