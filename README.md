@@ -1,6 +1,6 @@
 # Regex Sweep
 
-Regex Sweep is a local-first desktop app for scanning a folder with one or more regular expressions and exporting the matches to a JSON file.
+Regex Sweep is a local-first desktop app for scanning a folder with one or more regular expressions and creating a self-contained, filterable web report. JSON is also available as an export option.
 
 It is built with Tauri, React, and Rust. The app does the file search and JSON writing itself, so people using the packaged app do not need `ripgrep`, `jq`, Bash, Node.js, Rust, or Cargo installed.
 
@@ -10,9 +10,11 @@ It is built with Tauri, React, and Rust. The app does the file search and JSON w
 2. Use the optional test string panel to preview matches before scanning files.
 3. Choose a folder to search.
 4. Adjust advanced options if needed.
-5. Click **Export JSON** and choose where to save the results.
+5. Click **Web report** to create the main HTML report, or **Export JSON** if you need raw structured data.
 
-Regex Sweep sends the selected folder, patterns, and options to the bundled Rust backend. The backend walks the folder, applies the regex patterns to readable text files, collects match metadata, and writes one JSON file at the location you choose.
+Regex Sweep sends the selected folder, patterns, and options to the bundled Rust backend. The backend walks the folder, applies the regex patterns to readable text files, collects match metadata, and writes the selected export at the location you choose.
+
+Need help writing a pattern? [RegExr](https://regexr.com/) is a useful regex builder and tester.
 
 ## JSON output
 
@@ -30,6 +32,22 @@ The exported file is a JSON array. Each object includes the matched file, the re
   }
 ]
 ```
+
+## Web report output
+
+The **Web report** option creates a standalone `.html` file that can be opened in a browser and shared without any server. It includes:
+
+- Folder scanned
+- Scan date and time
+- Regex or search term
+- Number of files scanned
+- Number of affected files
+- Total matches
+- File types affected
+- Errors or inaccessible files
+- A filterable results table
+
+The table can be filtered by free text, pattern, file type, and affected file path.
 
 ## Advanced options
 

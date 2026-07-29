@@ -7,8 +7,10 @@ import {
   Check,
   ChevronDown,
   FileJson,
+  FileText,
   Folder,
   FolderOpen,
+  ExternalLink,
   Github,
   Info,
   Loader2,
@@ -25,6 +27,9 @@ type SweepResult = {
   matchesWritten: number
   filesScanned: number
   filesSkipped: number
+  affectedFiles: number
+  errorsCount: number
+  exportType: string
 }
 
 const isDesktop = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -38,7 +43,7 @@ function App() {
   const [folder, setFolder] = useState('')
   const [result, setResult] = useState<SweepResult | null>(null)
   const [error, setError] = useState('')
-  const [exporting, setExporting] = useState(false)
+  const [exporting, setExporting] = useState<'json' | 'report' | null>(null)
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [includeHidden, setIncludeHidden] = useState(false)
   const [ignoreCase, setIgnoreCase] = useState(false)
@@ -86,12 +91,12 @@ function App() {
     }
   }
 
-  const exportJson = async () => {
+  const runExport = async (type: 'json' | 'report') => {
     setError('')
     setResult(null)
 
     if (!desktopReady) {
-      setError('Run the desktop app to export JSON without ripgrep, jq, or Bash.')
+      setError('Run the desktop app to export files from a local folder.')
       return
     }
 
@@ -101,16 +106,16 @@ function App() {
     }
 
     const outputPath = await save({
-      defaultPath: 'regex-sweep-results.json',
-      filters: [{ name: 'JSON', extensions: ['json'] }],
-      title: 'Save regex sweep results',
+      defaultPath: type === 'json' ? 'regex-sweep-results.json' : 'regex-sweep-report.html',
+      filters: type === 'json' ? [{ name: 'JSON', extensions: ['json'] }] : [{ name: 'HTML report', extensions: ['html'] }],
+      title: type === 'json' ? 'Save regex sweep results' : 'Save regex sweep web report',
     })
 
     if (!outputPath) return
 
-    setExporting(true)
+    setExporting(type)
     try {
-      const sweepResult = await invoke<SweepResult>('sweep_to_json', {
+      const sweepResult = await invoke<SweepResult>(type === 'json' ? 'sweep_to_json' : 'sweep_to_report', {
         request: {
           patterns: validPatterns,
           folder,
@@ -124,9 +129,12 @@ function App() {
     } catch (error) {
       setError(error instanceof Error ? error.message : String(error))
     } finally {
-      setExporting(false)
+      setExporting(null)
     }
   }
+
+  const exportJson = () => runExport('json')
+  const exportReport = () => runExport('report')
 
   return <div className="shell noise">
     <header className="h-18 border-b border-[#dfe4df] bg-white/80 backdrop-blur">
@@ -138,13 +146,13 @@ function App() {
 
     <main className="mx-auto max-w-[1240px] px-6 py-12">
       <div className="mb-8 flex items-end justify-between gap-6">
-        <div><div className="mb-3 inline-flex items-center gap-2 rounded-full bg-[#def8e7] px-3 py-1 text-xs font-bold text-[#147841]"><Sparkles size={13}/> Native JSON export</div><h1 className="max-w-2xl text-4xl font-bold tracking-[-.045em] text-[#142019]">Sweep files and save matches as JSON.</h1><p className="mt-3 max-w-xl text-base leading-7 text-[#667269]">Define patterns, preview them against sample text, then let the desktop app scan a folder and write the result file directly.</p></div>
+        <div><div className="mb-3 inline-flex items-center gap-2 rounded-full bg-[#def8e7] px-3 py-1 text-xs font-bold text-[#147841]"><Sparkles size={13}/> Native reports</div><h1 className="max-w-2xl text-4xl font-bold tracking-[-.045em] text-[#142019]">Sweep files and create a filterable web report.</h1><p className="mt-3 max-w-xl text-base leading-7 text-[#667269]">Define patterns, preview them against sample text, then let the desktop app scan a folder and write a self-contained HTML report. JSON remains available as an export option.</p></div>
       </div>
 
       <section className="panel overflow-hidden rounded-2xl border border-[#dce2dd] bg-white">
         <div className="grid lg:grid-cols-2">
           <div className="border-b border-[#e1e6e2] p-6 lg:border-r lg:border-b-0">
-            <div className="mb-5 flex items-center justify-between"><div><p className="text-xs font-bold uppercase tracking-[.14em] text-[#199254]">01 · Patterns</p><h2 className="mt-1 text-lg font-bold tracking-tight">What should we find?</h2></div><span className="rounded-md bg-[#f0f3f0] px-2 py-1 font-mono text-[11px] text-[#68736b]">{patterns.length} {patterns.length === 1 ? 'pattern' : 'patterns'}</span></div>
+            <div className="mb-5 flex items-center justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[.14em] text-[#199254]">01 · Patterns</p><h2 className="mt-1 text-lg font-bold tracking-tight">What should we find?</h2></div><div className="flex items-center gap-2"><a href="https://regexr.com/" target="_blank" rel="noreferrer" className="flex items-center gap-1 rounded-md border border-[#dce3dd] bg-white px-2 py-1 text-xs font-bold text-[#16864a] hover:bg-[#effaf3]"><ExternalLink size={13}/> RegExr</a><span className="rounded-md bg-[#f0f3f0] px-2 py-1 font-mono text-[11px] text-[#68736b]">{patterns.length} {patterns.length === 1 ? 'pattern' : 'patterns'}</span></div></div>
             <div className="space-y-3">{patterns.map((pattern, index) => <div key={pattern.id} className="group flex items-center gap-2"><span className="w-5 text-right font-mono text-xs text-[#a0aaa2]">{String(index + 1).padStart(2, '0')}</span><label className="input h-12 flex-1 rounded-xl border-[#d9dfda] bg-[#fafbfa] shadow-none focus-within:border-[#20a75d] focus-within:outline-2 focus-within:outline-[#d8f6e4]"><Search size={16} className="text-[#879189]"/><input {...plainTextInputProps} aria-label={`Regex pattern ${index + 1}`} className="font-mono text-sm" value={pattern.value} onChange={e => updatePattern(pattern.id, e.target.value)} placeholder="Enter a regular expression..."/></label><button aria-label="Remove pattern" onClick={() => removePattern(pattern.id)} className="btn btn-ghost btn-square size-10 text-[#9aa29c] hover:bg-[#fff0f0] hover:text-[#c44848]" disabled={patterns.length === 1}><Trash2 size={16}/></button></div>)}</div>
             <button onClick={addPattern} className="mt-4 ml-7 flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-bold text-[#16864a] hover:bg-[#effaf3]"><Plus size={16}/> Add another pattern</button>
           </div>
@@ -156,22 +164,23 @@ function App() {
           </div>
         </div>
 
-        <div className="border-t border-[#e1e6e2] p-6"><p className="text-xs font-bold uppercase tracking-[.14em] text-[#d17b1c]">03 · Search scope</p><div className="mt-3 flex flex-col gap-3 sm:flex-row"><label className="input h-12 flex-1 rounded-xl border-[#d9dfda] bg-[#fafbfa] shadow-none focus-within:border-[#20a75d] focus-within:outline-2 focus-within:outline-[#d8f6e4]"><Folder size={17} className="text-[#7f8a82]"/><input {...plainTextInputProps} aria-label="Folder path" className="font-mono text-sm" value={folder} onChange={e => setFolder(e.target.value)} placeholder="/path/to/folder"/></label><button onClick={chooseFolder} className="btn h-12 rounded-xl border-[#cfd8d1] bg-white px-5 text-[#334039] hover:bg-[#f5f8f5]"><FolderOpen size={16}/> Choose folder</button><button onClick={exportJson} disabled={!canExport} className="btn h-12 rounded-xl border-0 bg-[#173c28] px-7 text-white shadow-[0_8px_20px_rgba(23,60,40,.18)] hover:bg-[#0f2e1d] disabled:bg-[#aeb8b1]">{exporting ? <Loader2 size={16} className="animate-spin"/> : <FileJson size={16}/>} {exporting ? 'Exporting' : 'Export JSON'}</button></div><p className="mt-2 text-xs text-[#879088]">The desktop app scans files itself and writes a JSON array to the location you choose.</p></div>
+        <div className="border-t border-[#e1e6e2] p-6"><p className="text-xs font-bold uppercase tracking-[.14em] text-[#d17b1c]">03 · Search scope</p><div className="mt-3 flex flex-col gap-3 sm:flex-row"><label className="input h-12 flex-1 rounded-xl border-[#d9dfda] bg-[#fafbfa] shadow-none focus-within:border-[#20a75d] focus-within:outline-2 focus-within:outline-[#d8f6e4]"><Folder size={17} className="text-[#7f8a82]"/><input {...plainTextInputProps} aria-label="Folder path" className="font-mono text-sm" value={folder} onChange={e => setFolder(e.target.value)} placeholder="/path/to/folder"/></label><button onClick={chooseFolder} className="btn h-12 rounded-xl border-[#cfd8d1] bg-white px-5 text-[#334039] hover:bg-[#f5f8f5]"><FolderOpen size={16}/> Choose folder</button><button onClick={exportJson} disabled={!canExport} className="btn h-12 rounded-xl border-0 bg-[#173c28] px-5 text-white shadow-[0_8px_20px_rgba(23,60,40,.18)] hover:bg-[#0f2e1d] disabled:bg-[#aeb8b1]">{exporting === 'json' ? <Loader2 size={16} className="animate-spin"/> : <FileJson size={16}/>} {exporting === 'json' ? 'Exporting' : 'Export JSON'}</button><button onClick={exportReport} disabled={!canExport} className="btn h-12 rounded-xl border-[#173c28] bg-white px-5 text-[#173c28] hover:bg-[#effaf3] disabled:border-[#cfd8d1] disabled:text-[#8a948c]">{exporting === 'report' ? <Loader2 size={16} className="animate-spin"/> : <FileText size={16}/>} {exporting === 'report' ? 'Building report' : 'Web report'}</button></div><p className="mt-2 text-xs text-[#879088]">Export a raw JSON array, or a self-contained HTML report with scan metadata and a filterable table.</p></div>
       </section>
 
       <section className={`panel mt-6 overflow-hidden rounded-2xl border bg-white transition-all ${result ? 'border-[#b9d9c4] opacity-100' : error ? 'border-[#f1c5c5] opacity-100' : 'border-[#dfe4df] opacity-80'}`}>
-        <div className="flex items-center justify-between border-b border-[#e4e8e4] px-5 py-3"><div className="flex items-center gap-2"><span className="flex gap-1.5"><i className="size-2.5 rounded-full bg-[#ff6b65]"/><i className="size-2.5 rounded-full bg-[#f5bd4f]"/><i className="size-2.5 rounded-full bg-[#57c45c]"/></span><span className="ml-2 font-mono text-xs text-[#778179]">regex-sweep-results.json</span></div><button aria-expanded={showAdvanced} onClick={() => setShowAdvanced(value => !value)} className="flex items-center gap-1 font-semibold text-[#4d5a51]">Advanced options <ChevronDown size={14} className={`transition-transform ${showAdvanced ? 'rotate-180' : ''}`}/></button></div>
+        <div className="flex items-center justify-between border-b border-[#e4e8e4] px-5 py-3"><div className="flex items-center gap-2"><span className="flex gap-1.5"><i className="size-2.5 rounded-full bg-[#ff6b65]"/><i className="size-2.5 rounded-full bg-[#f5bd4f]"/><i className="size-2.5 rounded-full bg-[#57c45c]"/></span><span className="ml-2 font-mono text-xs text-[#778179]">{result?.exportType === 'HTML report' ? 'regex-sweep-report.html' : 'regex-sweep-results.json'}</span></div><button aria-expanded={showAdvanced} onClick={() => setShowAdvanced(value => !value)} className="flex items-center gap-1 font-semibold text-[#4d5a51]">Advanced options <ChevronDown size={14} className={`transition-transform ${showAdvanced ? 'rotate-180' : ''}`}/></button></div>
         <div className="bg-[#15231a] p-5 text-sm leading-6 text-[#d9e7dc]">
           {!result && !error && <div className="flex items-center gap-2 text-[#9eb3a5]"><FileJson size={16}/> Export status will appear here</div>}
           {error && <div className="flex items-start gap-2 text-[#ffb8b8]"><AlertCircle size={17} className="mt-0.5 shrink-0"/><span>{error}</span></div>}
-          {result && <div className="grid gap-3 sm:grid-cols-4">
+          {result && <div className="grid gap-3 sm:grid-cols-5">
             <div><p className="text-xs uppercase tracking-wider text-[#80a98c]">Matches</p><p className="mt-1 text-2xl font-bold text-white">{result.matchesWritten}</p></div>
             <div><p className="text-xs uppercase tracking-wider text-[#80a98c]">Files scanned</p><p className="mt-1 text-2xl font-bold text-white">{result.filesScanned}</p></div>
-            <div><p className="text-xs uppercase tracking-wider text-[#80a98c]">Skipped</p><p className="mt-1 text-2xl font-bold text-white">{result.filesSkipped}</p></div>
+            <div><p className="text-xs uppercase tracking-wider text-[#80a98c]">Affected files</p><p className="mt-1 text-2xl font-bold text-white">{result.affectedFiles}</p></div>
+            <div><p className="text-xs uppercase tracking-wider text-[#80a98c]">Errors</p><p className="mt-1 text-2xl font-bold text-white">{result.errorsCount ?? result.filesSkipped}</p></div>
             <div className="sm:col-span-1"><p className="text-xs uppercase tracking-wider text-[#80a98c]">Saved</p><p className="mt-1 break-all font-mono text-xs text-[#d9e7dc]">{result.outputPath}</p></div>
           </div>}
         </div>
-        {result && <div className="flex items-center gap-2 px-5 py-3 text-xs text-[#587060]"><Check size={14} className="text-[#199254]"/> JSON file created successfully</div>}
+        {result && <div className="flex items-center gap-2 px-5 py-3 text-xs text-[#587060]"><Check size={14} className="text-[#199254]"/> {result.exportType} created successfully</div>}
         {showAdvanced && <div className="grid gap-4 border-t border-[#e4e8e4] bg-[#fafbfa] px-5 py-4 sm:grid-cols-3">
           <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-[#dfe4df] bg-white p-3 text-sm"><input type="checkbox" className="checkbox checkbox-sm border-[#aab4ac] text-[#173c28]" checked={includeHidden} onChange={e => setIncludeHidden(e.target.checked)}/><span><b className="block text-[#263229]">Include hidden files</b><small className="text-[#7b867e]">Search dotfiles and hidden folders</small></span></label>
           <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-[#dfe4df] bg-white p-3 text-sm"><input type="checkbox" className="checkbox checkbox-sm border-[#aab4ac] text-[#173c28]" checked={ignoreCase} onChange={e => setIgnoreCase(e.target.checked)}/><span><b className="block text-[#263229]">Ignore letter case</b><small className="text-[#7b867e]">Applies to preview and export</small></span></label>

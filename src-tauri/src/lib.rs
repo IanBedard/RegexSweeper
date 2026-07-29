@@ -1,8 +1,10 @@
+use chrono::Local;
 use globset::{Glob, GlobMatcher};
 use ignore::WalkBuilder;
 use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -25,9 +27,12 @@ struct SweepResult {
     matches_written: usize,
     files_scanned: usize,
     files_skipped: usize,
+    affected_files: usize,
+    errors_count: usize,
+    export_type: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct MatchRecord {
     path: String,
@@ -37,6 +42,22 @@ struct MatchRecord {
     line: usize,
     start_column: usize,
     end_column: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FileError {
+    path: String,
+    error: String,
+}
+
+struct SweepData {
+    folder_scanned: String,
+    scan_date_time: String,
+    patterns: Vec<String>,
+    matches: Vec<MatchRecord>,
+    files_scanned: usize,
+    errors: Vec<FileError>,
 }
 
 struct CompiledPattern {
@@ -51,27 +72,54 @@ struct FileGlob {
 
 #[tauri::command]
 fn sweep_to_json(request: SweepRequest) -> Result<SweepResult, String> {
-    let root = PathBuf::from(request.folder.trim());
-    if !root.is_dir() {
-        return Err("Choose a folder that exists before exporting JSON.".into());
-    }
+    let output_path = validate_output_path(&request.output_path)?;
+    let data = run_sweep(&request)?;
 
-    let output_path = PathBuf::from(request.output_path.trim());
+    let json = serde_json::to_string_pretty(&data.matches)
+        .map_err(|error| format!("Could not serialize matches: {error}"))?;
+    fs::write(&output_path, format!("{json}\n"))
+        .map_err(|error| format!("Could not write JSON file: {error}"))?;
+
+    Ok(sweep_result(output_path, &data, "JSON"))
+}
+
+#[tauri::command]
+fn sweep_to_report(request: SweepRequest) -> Result<SweepResult, String> {
+    let output_path = validate_output_path(&request.output_path)?;
+    let data = run_sweep(&request)?;
+    let html = build_html_report(&data)?;
+
+    fs::write(&output_path, html).map_err(|error| format!("Could not write report: {error}"))?;
+
+    Ok(sweep_result(output_path, &data, "HTML report"))
+}
+
+fn validate_output_path(output_path: &str) -> Result<PathBuf, String> {
+    let output_path = PathBuf::from(output_path.trim());
     if let Some(parent) = output_path.parent() {
         if !parent.as_os_str().is_empty() && !parent.exists() {
             return Err("Choose an output location inside an existing folder.".into());
         }
     }
 
+    Ok(output_path)
+}
+
+fn run_sweep(request: &SweepRequest) -> Result<SweepData, String> {
+    let root = PathBuf::from(request.folder.trim());
+    if !root.is_dir() {
+        return Err("Choose a folder that exists before exporting.".into());
+    }
+
     let patterns = compile_patterns(&request.patterns, request.ignore_case)?;
     if patterns.is_empty() {
-        return Err("Add at least one regex pattern before exporting JSON.".into());
+        return Err("Add at least one regex pattern before exporting.".into());
     }
 
     let file_glob = compile_glob(request.glob.as_deref())?;
     let mut files_scanned = 0;
-    let mut files_skipped = 0;
     let mut records = Vec::new();
+    let mut errors = Vec::new();
 
     let mut walker = WalkBuilder::new(&root);
     walker
@@ -83,8 +131,11 @@ fn sweep_to_json(request: SweepRequest) -> Result<SweepResult, String> {
     for entry in walker.build() {
         let entry = match entry {
             Ok(entry) => entry,
-            Err(_) => {
-                files_skipped += 1;
+            Err(error) => {
+                errors.push(FileError {
+                    path: "Unknown path".to_string(),
+                    error: error.to_string(),
+                });
                 continue;
             }
         };
@@ -96,8 +147,11 @@ fn sweep_to_json(request: SweepRequest) -> Result<SweepResult, String> {
 
         let content = match fs::read_to_string(path) {
             Ok(content) => content,
-            Err(_) => {
-                files_skipped += 1;
+            Err(error) => {
+                errors.push(FileError {
+                    path: display_path(path, &root),
+                    error: error.to_string(),
+                });
                 continue;
             }
         };
@@ -106,17 +160,26 @@ fn sweep_to_json(request: SweepRequest) -> Result<SweepResult, String> {
         collect_matches(path, &root, &content, &patterns, &mut records);
     }
 
-    let json = serde_json::to_string_pretty(&records)
-        .map_err(|error| format!("Could not serialize matches: {error}"))?;
-    fs::write(&output_path, format!("{json}\n"))
-        .map_err(|error| format!("Could not write JSON file: {error}"))?;
-
-    Ok(SweepResult {
-        output_path: output_path.display().to_string(),
-        matches_written: records.len(),
+    Ok(SweepData {
+        folder_scanned: root.display().to_string(),
+        scan_date_time: Local::now().format("%Y-%m-%d %H:%M:%S %Z").to_string(),
+        patterns: patterns.iter().map(|pattern| pattern.source.clone()).collect(),
+        matches: records,
         files_scanned,
-        files_skipped,
+        errors,
     })
+}
+
+fn sweep_result(output_path: PathBuf, data: &SweepData, export_type: &str) -> SweepResult {
+    SweepResult {
+        output_path: output_path.display().to_string(),
+        matches_written: data.matches.len(),
+        files_scanned: data.files_scanned,
+        files_skipped: data.errors.len(),
+        affected_files: affected_files(data).len(),
+        errors_count: data.errors.len(),
+        export_type: export_type.to_string(),
+    }
 }
 
 fn compile_patterns(patterns: &[String], ignore_case: bool) -> Result<Vec<CompiledPattern>, String> {
@@ -178,11 +241,7 @@ fn collect_matches(
     patterns: &[CompiledPattern],
     records: &mut Vec<MatchRecord>,
 ) {
-    let display_path = path
-        .strip_prefix(root)
-        .unwrap_or(path)
-        .display()
-        .to_string();
+    let display_path = display_path(path, root);
 
     for (line_index, line) in content.lines().enumerate() {
         for pattern in patterns {
@@ -200,12 +259,230 @@ fn collect_matches(
     }
 }
 
+fn display_path(path: &Path, root: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .display()
+        .to_string()
+}
+
+fn affected_files(data: &SweepData) -> BTreeSet<String> {
+    data.matches
+        .iter()
+        .map(|record| record.path.clone())
+        .collect::<BTreeSet<_>>()
+}
+
+fn file_type_counts(data: &SweepData) -> BTreeMap<String, usize> {
+    let mut counts = BTreeMap::new();
+    for path in affected_files(data) {
+        let extension = Path::new(&path)
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(|value| format!(".{}", value.to_lowercase()))
+            .unwrap_or_else(|| "No extension".to_string());
+        *counts.entry(extension).or_insert(0) += 1;
+    }
+    counts
+}
+
+fn build_html_report(data: &SweepData) -> Result<String, String> {
+    let affected_files = affected_files(data);
+    let file_types = file_type_counts(data);
+    let records_json = serde_json::to_string(&data.matches)
+        .map_err(|error| format!("Could not serialize report rows: {error}"))?;
+    let errors_json = serde_json::to_string(&data.errors)
+        .map_err(|error| format!("Could not serialize report errors: {error}"))?;
+    let file_types_json = serde_json::to_string(&file_types)
+        .map_err(|error| format!("Could not serialize file types: {error}"))?;
+    let patterns_json = serde_json::to_string(&data.patterns)
+        .map_err(|error| format!("Could not serialize patterns: {error}"))?;
+
+    Ok(format!(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Regex Sweep Report</title>
+  <style>
+    :root {{ color: #17211c; background: #f3f5f2; font-family: "Segoe UI", Arial, sans-serif; }}
+    * {{ box-sizing: border-box; }}
+    body {{ margin: 0; min-width: 320px; background: radial-gradient(circle at 50% -20%, #fff 0, #f4f6f3 43%, #edf0ec 100%); }}
+    header {{ position: sticky; top: 0; z-index: 3; border-bottom: 1px solid #dfe4df; background: rgba(255,255,255,.88); backdrop-filter: blur(12px); }}
+    .bar {{ max-width: 1240px; margin: 0 auto; padding: 18px 24px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }}
+    .brand {{ display: flex; align-items: center; gap: 12px; font-weight: 800; font-size: 18px; letter-spacing: -.03em; }}
+    .logo {{ width: 36px; height: 36px; border-radius: 12px; background: #173c28; color: #95f5b8; display: grid; place-items: center; font-size: 24px; line-height: 1; box-shadow: 0 1px 3px rgba(0,0,0,.12); }}
+    .tag {{ border: 1px solid #dce3dd; background: #f6f8f6; color: #617067; border-radius: 999px; padding: 3px 8px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .12em; }}
+    main {{ max-width: 1240px; margin: 0 auto; padding: 42px 24px 64px; }}
+    .eyebrow {{ display: inline-flex; align-items: center; gap: 8px; background: #def8e7; color: #147841; border-radius: 999px; padding: 6px 12px; font-size: 12px; font-weight: 800; }}
+    h1 {{ margin: 18px 0 10px; color: #142019; font-size: clamp(34px, 5vw, 54px); line-height: 1; letter-spacing: -.045em; }}
+    .lede {{ margin: 0 0 28px; max-width: 760px; color: #667269; font-size: 17px; line-height: 1.6; }}
+    .panel {{ overflow: hidden; border: 1px solid #dce2dd; border-radius: 16px; background: white; box-shadow: 0 1px 1px rgba(22,34,27,.04), 0 16px 40px rgba(22,34,27,.06); margin-top: 22px; }}
+    .summary {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); border-top: 1px solid #e1e6e2; }}
+    .metric {{ padding: 20px; border-right: 1px solid #e8ece8; border-bottom: 1px solid #e8ece8; }}
+    .metric span {{ display: block; color: #809086; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .12em; }}
+    .metric strong {{ display: block; margin-top: 8px; color: #173c28; font-size: 30px; line-height: 1; }}
+    .details {{ padding: 20px; display: grid; gap: 14px; }}
+    .details div {{ display: grid; gap: 4px; }}
+    .details span, .controls span {{ color: #809086; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .12em; }}
+    .details code {{ color: #263229; background: #f0f3f0; border-radius: 6px; padding: 3px 6px; word-break: break-all; }}
+    .chips {{ display: flex; flex-wrap: wrap; gap: 8px; }}
+    .chip {{ border: 1px solid #dfe4df; border-radius: 999px; background: #fafbfa; color: #263229; padding: 6px 10px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }}
+    .controls {{ display: grid; grid-template-columns: 1.5fr repeat(3, minmax(150px, .5fr)); gap: 12px; padding: 18px; border-bottom: 1px solid #e4e8e4; background: #fbfcfb; }}
+    label {{ display: grid; gap: 6px; }}
+    input, select {{ width: 100%; min-height: 42px; border: 1px solid #d9dfda; border-radius: 10px; background: white; padding: 0 12px; color: #17211c; font: inherit; }}
+    table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
+    th, td {{ padding: 12px 14px; border-bottom: 1px solid #e8ece8; text-align: left; vertical-align: top; }}
+    th {{ position: sticky; top: 73px; z-index: 2; background: #f6f8f6; color: #5e6c63; font-size: 11px; text-transform: uppercase; letter-spacing: .12em; }}
+    td code {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: #263229; }}
+    .path {{ max-width: 360px; word-break: break-all; }}
+    .match {{ max-width: 380px; word-break: break-word; }}
+    .empty {{ padding: 28px; color: #7b867e; }}
+    .errors {{ padding: 18px; display: grid; gap: 10px; }}
+    .error-row {{ border: 1px solid #f1c5c5; background: #fff5f5; border-radius: 10px; padding: 12px; color: #7a2c2c; }}
+    @media (max-width: 820px) {{
+      .controls {{ grid-template-columns: 1fr; }}
+      .bar {{ align-items: flex-start; flex-direction: column; }}
+      th {{ position: static; }}
+    }}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="bar">
+      <div class="brand"><div class="logo">{{}}</div><span>Regex Sweep</span><span class="tag">Report</span></div>
+      <div class="tag">Self-contained HTML</div>
+    </div>
+  </header>
+  <main>
+    <span class="eyebrow">Sweep results</span>
+    <h1>Filtered report</h1>
+    <p class="lede">A standalone report generated by Regex Sweep with summary metrics and an accessible filterable table of every match.</p>
+
+    <section class="panel">
+      <div class="details">
+        <div><span>Folder scanned</span><code>{folder}</code></div>
+        <div><span>Scan date and time</span><code>{scan_date}</code></div>
+        <div><span>Regex or search term</span><div class="chips" id="patterns"></div></div>
+        <div><span>File types affected</span><div class="chips" id="fileTypes"></div></div>
+      </div>
+      <div class="summary">
+        <div class="metric"><span>Files scanned</span><strong>{files_scanned}</strong></div>
+        <div class="metric"><span>Affected files</span><strong>{affected_files}</strong></div>
+        <div class="metric"><span>Total matches</span><strong>{total_matches}</strong></div>
+        <div class="metric"><span>Errors</span><strong>{errors_count}</strong></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="controls">
+        <label><span>Search table</span><input id="q" placeholder="Filter path, regex, match text, line..." autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+        <label><span>Pattern</span><select id="patternFilter"><option value="">All patterns</option></select></label>
+        <label><span>File type</span><select id="typeFilter"><option value="">All file types</option></select></label>
+        <label><span>File path</span><select id="pathFilter"><option value="">All affected files</option></select></label>
+      </div>
+      <div style="overflow:auto">
+        <table>
+          <thead><tr><th>Path</th><th>Pattern</th><th>Match</th><th>Line</th><th>Columns</th></tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+      <div class="empty" id="empty" hidden>No rows match the current filters.</div>
+    </section>
+
+    <section class="panel">
+      <div class="details"><div><span>Errors or inaccessible files</span></div></div>
+      <div class="errors" id="errors"></div>
+    </section>
+  </main>
+
+  <script>
+    const rows = {records_json};
+    const errors = {errors_json};
+    const fileTypes = {file_types_json};
+    const patterns = {patterns_json};
+    const byId = id => document.getElementById(id);
+    const extOf = path => {{
+      const name = path.split(/[\\\\/]/).pop() || path;
+      const index = name.lastIndexOf('.');
+      return index > 0 ? name.slice(index).toLowerCase() : 'No extension';
+    }};
+    const escapeHtml = value => String(value).replace(/[&<>"']/g, char => ({{ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }}[char]));
+    const unique = values => [...new Set(values)].sort((a, b) => a.localeCompare(b));
+    const addOptions = (select, values) => values.forEach(value => {{
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = value;
+      select.appendChild(option);
+    }});
+    const addChips = (container, values) => {{
+      container.innerHTML = values.length ? values.map(value => `<span class=\"chip\">${{escapeHtml(value)}}</span>`).join('') : '<span class=\"chip\">None</span>';
+    }};
+    addChips(byId('patterns'), patterns);
+    addChips(byId('fileTypes'), Object.entries(fileTypes).map(([type, count]) => `${{type}} (${{count}})`));
+    addOptions(byId('patternFilter'), unique(rows.map(row => row.pattern)));
+    addOptions(byId('typeFilter'), unique(rows.map(row => extOf(row.path)));
+    addOptions(byId('pathFilter'), unique(rows.map(row => row.path)));
+
+    function render() {{
+      const q = byId('q').value.trim().toLowerCase();
+      const pattern = byId('patternFilter').value;
+      const type = byId('typeFilter').value;
+      const path = byId('pathFilter').value;
+      const filtered = rows.filter(row => {{
+        const haystack = [row.path, row.pattern, row.match, row.line, row.startColumn, row.endColumn].join(' ').toLowerCase();
+        return (!q || haystack.includes(q)) &&
+          (!pattern || row.pattern === pattern) &&
+          (!type || extOf(row.path) === type) &&
+          (!path || row.path === path);
+      }});
+      byId('rows').innerHTML = filtered.map(row => `<tr>
+        <td class=\"path\"><code>${{escapeHtml(row.path)}}</code></td>
+        <td><code>${{escapeHtml(row.pattern)}}</code></td>
+        <td class=\"match\">${{escapeHtml(row.match)}}</td>
+        <td>${{row.line}}</td>
+        <td>${{row.startColumn}}-${{row.endColumn}}</td>
+      </tr>`).join('');
+      byId('empty').hidden = filtered.length !== 0;
+    }}
+    ['q', 'patternFilter', 'typeFilter', 'pathFilter'].forEach(id => byId(id).addEventListener('input', render));
+    render();
+
+    byId('errors').innerHTML = errors.length
+      ? errors.map(error => `<div class=\"error-row\"><strong>${{escapeHtml(error.path)}}</strong><br>${{escapeHtml(error.error)}}</div>`).join('')
+      : '<div class=\"empty\">No inaccessible files were reported.</div>';
+  </script>
+</body>
+</html>"#,
+        folder = html_escape(&data.folder_scanned),
+        scan_date = html_escape(&data.scan_date_time),
+        files_scanned = data.files_scanned,
+        affected_files = affected_files.len(),
+        total_matches = data.matches.len(),
+        errors_count = data.errors.len(),
+        records_json = records_json,
+        errors_json = errors_json,
+        file_types_json = file_types_json,
+        patterns_json = patterns_json,
+    ))
+}
+
+fn html_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![sweep_to_json])
+        .invoke_handler(tauri::generate_handler![sweep_to_json, sweep_to_report])
         .run(tauri::generate_context!())
         .expect("error while running Regex Sweep");
 }
