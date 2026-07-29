@@ -1,6 +1,6 @@
 # Regex Sweep
 
-Regex Sweep is a local-first desktop app for scanning a folder with one or more regular expressions and creating a self-contained, filterable web report. JSON is also available as an export option.
+Regex Sweep is a local-first desktop app for scanning a folder with one or more regular expressions and creating a report. The main output is a self-contained, filterable HTML report, and JSON is also available as an export option.
 
 It is built with Tauri, React, and Rust. The app does the file search and JSON writing itself, so people using the packaged app do not need `ripgrep`, `jq`, Bash, Node.js, Rust, or Cargo installed.
 
