@@ -111,6 +111,7 @@ fn run_sweep(request: &SweepRequest) -> Result<SweepData, String> {
         return Err("Choose a folder that exists before exporting.".into());
     }
 
+    let output_path = comparable_path(Path::new(request.output_path.trim()));
     let patterns = compile_patterns(&request.patterns, request.ignore_case)?;
     if patterns.is_empty() {
         return Err("Add at least one regex pattern before exporting.".into());
@@ -141,6 +142,10 @@ fn run_sweep(request: &SweepRequest) -> Result<SweepData, String> {
         };
 
         let path = entry.path();
+        if comparable_path(path) == output_path {
+            continue;
+        }
+
         if !path.is_file() || !matches_glob(path, &root, file_glob.as_ref()) {
             continue;
         }
@@ -163,7 +168,10 @@ fn run_sweep(request: &SweepRequest) -> Result<SweepData, String> {
     Ok(SweepData {
         folder_scanned: root.display().to_string(),
         scan_date_time: Local::now().format("%Y-%m-%d %H:%M:%S %Z").to_string(),
-        patterns: patterns.iter().map(|pattern| pattern.source.clone()).collect(),
+        patterns: patterns
+            .iter()
+            .map(|pattern| pattern.source.clone())
+            .collect(),
         matches: records,
         files_scanned,
         errors,
@@ -182,7 +190,10 @@ fn sweep_result(output_path: PathBuf, data: &SweepData, export_type: &str) -> Sw
     }
 }
 
-fn compile_patterns(patterns: &[String], ignore_case: bool) -> Result<Vec<CompiledPattern>, String> {
+fn compile_patterns(
+    patterns: &[String],
+    ignore_case: bool,
+) -> Result<Vec<CompiledPattern>, String> {
     patterns
         .iter()
         .map(|pattern| pattern.trim())
@@ -266,6 +277,10 @@ fn display_path(path: &Path, root: &Path) -> String {
         .to_string()
 }
 
+fn comparable_path(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
 fn affected_files(data: &SweepData) -> BTreeSet<String> {
     data.matches
         .iter()
@@ -334,6 +349,7 @@ fn build_html_report(data: &SweepData) -> Result<String, String> {
     .chips {{ display: flex; flex-wrap: wrap; gap: 8px; }}
     .chip {{ border: 1px solid #dfe4df; border-radius: 999px; background: #fafbfa; color: #263229; padding: 6px 10px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }}
     .controls {{ display: grid; grid-template-columns: 1.5fr repeat(3, minmax(150px, .5fr)); gap: 12px; padding: 18px; border-bottom: 1px solid #e4e8e4; background: #fbfcfb; }}
+    .table-status {{ padding: 10px 18px; border-bottom: 1px solid #e4e8e4; color: #667269; font-size: 13px; }}
     label {{ display: grid; gap: 6px; }}
     input, select {{ width: 100%; min-height: 42px; border: 1px solid #d9dfda; border-radius: 10px; background: white; padding: 0 12px; color: #17211c; font: inherit; }}
     table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
@@ -386,6 +402,7 @@ fn build_html_report(data: &SweepData) -> Result<String, String> {
         <label><span>File type</span><select id="typeFilter"><option value="">All file types</option></select></label>
         <label><span>File path</span><select id="pathFilter"><option value="">All affected files</option></select></label>
       </div>
+      <div class="table-status" id="tableStatus"></div>
       <div style="overflow:auto">
         <table>
           <thead><tr><th>Path</th><th>Pattern</th><th>Match</th><th>Line</th><th>Columns</th></tr></thead>
@@ -440,7 +457,7 @@ fn build_html_report(data: &SweepData) -> Result<String, String> {
     addChips(byId('patterns'), patterns);
     addChips(byId('fileTypes'), Object.entries(fileTypes).map(([type, count]) => `${{type}} (${{count}})`));
     addOptions(byId('patternFilter'), unique(rows.map(row => row.pattern)));
-    addOptions(byId('typeFilter'), unique(rows.map(row => extOf(row.path)));
+    addOptions(byId('typeFilter'), unique(rows.map(row => extOf(row.path))));
     addOptions(byId('pathFilter'), unique(rows.map(row => row.path)));
 
     function render() {{
@@ -462,9 +479,13 @@ fn build_html_report(data: &SweepData) -> Result<String, String> {
         <td>${{row.line}}</td>
         <td>${{row.startColumn}}-${{row.endColumn}}</td>
       </tr>`).join('');
+      byId('tableStatus').textContent = `Showing ${{filtered.length}} of ${{rows.length}} matches`;
       byId('empty').hidden = filtered.length !== 0;
     }}
-    ['q', 'patternFilter', 'typeFilter', 'pathFilter'].forEach(id => byId(id).addEventListener('input', render));
+    ['q', 'patternFilter', 'typeFilter', 'pathFilter'].forEach(id => {{
+      byId(id).addEventListener('input', render);
+      byId(id).addEventListener('change', render);
+    }});
     render();
 
     byId('errors').innerHTML = errors.length
