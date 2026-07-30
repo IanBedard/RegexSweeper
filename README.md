@@ -70,7 +70,7 @@ src-tauri/target/release/bundle/dmg/Regex Sweep_0.1.0_aarch64.dmg
 On Windows, a production build can create a Microsoft Store-ready MSIX package from a Windows build machine or GitHub Actions runner:
 
 ```text
-dist-msix/RegexSweep_0.1.0.0_x64.msix
+dist-msix/RegexSweepDesktop_0.1.0.0_x64.msix
 ```
 
 The packaged app is self-contained. Runtime terminal tools are not required.

@@ -12,7 +12,7 @@ $exeName = "regex-sweep.exe"
 $exePath = Join-Path $repoRoot "src-tauri\target\release\$exeName"
 $manifestPath = Join-Path $repoRoot "Package.appxmanifest"
 $logoPath = Join-Path $repoRoot "logo.png"
-$msixName = "RegexSweep_0.1.0.0_x64.msix"
+$msixName = "RegexSweepDesktop_0.1.0.0_x64.msix"
 $msixPath = Join-Path $outputRoot $msixName
 
 Set-Location $repoRoot

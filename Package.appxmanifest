@@ -6,13 +6,13 @@
   IgnorableNamespaces="uap rescap">
 
   <Identity
-    Name="IanBedard.RegexSweep"
-    Publisher="CN=Ian Bedard"
+    Name="IanBedard.RegexSweepDesktop"
+    Publisher="CN=9FFEB780-1A1E-48DB-9EF0-7CC01A603EBE"
     Version="0.1.0.0"
     ProcessorArchitecture="x64" />
 
   <Properties>
-    <DisplayName>Regex Sweep</DisplayName>
+    <DisplayName>Regex Sweep Desktop</DisplayName>
     <PublisherDisplayName>Ian Bedard</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
     <Description>A local-first desktop regex sweeper that exports matches to reports and JSON.</Description>
@@ -29,7 +29,7 @@
   <Applications>
     <Application Id="App" Executable="$targetnametoken$.exe" EntryPoint="$targetentrypoint$">
       <uap:VisualElements
-        DisplayName="Regex Sweep"
+        DisplayName="Regex Sweep Desktop"
         Description="Sweep folders with regular expressions and export local reports."
         BackgroundColor="transparent"
         Square150x150Logo="Assets\Square150x150Logo.png"
