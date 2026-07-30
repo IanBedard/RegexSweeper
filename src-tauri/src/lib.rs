@@ -95,6 +95,26 @@ fn sweep_to_report(request: SweepRequest) -> Result<SweepResult, String> {
     Ok(sweep_result(output_path, &data, "HTML report"))
 }
 
+#[tauri::command]
+fn import_text_file(path: String) -> Result<String, String> {
+    let path = PathBuf::from(path.trim());
+    if !path.is_file() {
+        return Err("Choose a text file that exists.".into());
+    }
+
+    if is_unsupported_binary_file(&path) {
+        return Err("Choose a text file to import.".into());
+    }
+
+    fs::read_to_string(&path).map_err(|error| {
+        if error.kind() == ErrorKind::InvalidData {
+            "Choose a UTF-8 text file to import.".to_string()
+        } else {
+            format!("Could not read text file: {error}")
+        }
+    })
+}
+
 fn validate_output_path(output_path: &str) -> Result<PathBuf, String> {
     let output_path = PathBuf::from(output_path.trim());
     if let Some(parent) = output_path.parent() {
@@ -577,7 +597,11 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![sweep_to_json, sweep_to_report])
+        .invoke_handler(tauri::generate_handler![
+            sweep_to_json,
+            sweep_to_report,
+            import_text_file
+        ])
         .run(tauri::generate_context!())
         .expect("error while running Regex Sweep");
 }

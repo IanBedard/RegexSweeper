@@ -6,6 +6,7 @@ import {
   AlertCircle,
   Check,
   ChevronDown,
+  Eraser,
   FileJson,
   FileText,
   Folder,
@@ -18,6 +19,7 @@ import {
   Search,
   Sparkles,
   Trash2,
+  Upload,
 } from 'lucide-react'
 
 type Pattern = { id: number; value: string }
@@ -42,6 +44,7 @@ function App() {
   const [result, setResult] = useState<SweepResult | null>(null)
   const [error, setError] = useState('')
   const [exporting, setExporting] = useState<'json' | 'report' | null>(null)
+  const [importingSample, setImportingSample] = useState(false)
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [includeHidden, setIncludeHidden] = useState(false)
   const [ignoreCase, setIgnoreCase] = useState(false)
@@ -63,6 +66,11 @@ function App() {
   const updatePattern = (id: number, value: string) => setPatterns(items => items.map(item => item.id === id ? { ...item, value } : item))
   const addPattern = () => setPatterns(items => [...items, { id: Date.now(), value: '' }])
   const removePattern = (id: number) => setPatterns(items => items.length === 1 ? items : items.filter(item => item.id !== id))
+  const clearPatterns = () => {
+    setPatterns([{ id: Date.now(), value: '' }])
+    setResult(null)
+    setError('')
+  }
   const plainTextInputProps = {
     autoCapitalize: 'none',
     autoCorrect: 'off',
@@ -86,6 +94,34 @@ function App() {
 
     if (typeof selected === 'string') {
       setFolder(selected)
+    }
+  }
+
+  const importSampleFile = async () => {
+    setError('')
+    setResult(null)
+
+    if (!desktopReady) {
+      setError('File import is available in the Tauri desktop app.')
+      return
+    }
+
+    const selected = await open({
+      directory: false,
+      multiple: false,
+      title: 'Choose a text file to preview',
+    })
+
+    if (typeof selected !== 'string') return
+
+    setImportingSample(true)
+    try {
+      const text = await invoke<string>('import_text_file', { path: selected })
+      setSample(text)
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setImportingSample(false)
     }
   }
 
@@ -152,11 +188,14 @@ function App() {
           <div className="border-b border-[#e1e6e2] p-6 lg:border-r lg:border-b-0">
             <div className="mb-5 flex items-center justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[.14em] text-[#199254]">01 · Patterns</p><h2 className="mt-1 text-lg font-bold tracking-tight">What should we find?</h2></div><div className="flex items-center gap-2"><a href="https://regexr.com/" target="_blank" rel="noreferrer" className="flex items-center gap-1 rounded-md border border-[#dce3dd] bg-white px-2 py-1 text-xs font-bold text-[#16864a] hover:bg-[#effaf3]"><ExternalLink size={13}/> RegExr</a><span className="rounded-md bg-[#f0f3f0] px-2 py-1 font-mono text-[11px] text-[#68736b]">{patterns.length} {patterns.length === 1 ? 'pattern' : 'patterns'}</span></div></div>
             <div className="space-y-3">{patterns.map((pattern, index) => <div key={pattern.id} className="group flex items-center gap-2"><span className="w-5 text-right font-mono text-xs text-[#a0aaa2]">{String(index + 1).padStart(2, '0')}</span><label className="input h-12 flex-1 rounded-xl border-[#d9dfda] bg-[#fafbfa] shadow-none focus-within:border-[#20a75d] focus-within:outline-2 focus-within:outline-[#d8f6e4]"><Search size={16} className="text-[#879189]"/><input {...plainTextInputProps} aria-label={`Regex pattern ${index + 1}`} className="font-mono text-sm" value={pattern.value} onChange={e => updatePattern(pattern.id, e.target.value)} placeholder="Enter a regular expression..."/></label><button aria-label="Remove pattern" onClick={() => removePattern(pattern.id)} className="btn btn-ghost btn-square size-10 text-[#9aa29c] hover:bg-[#fff0f0] hover:text-[#c44848]" disabled={patterns.length === 1}><Trash2 size={16}/></button></div>)}</div>
-            <button onClick={addPattern} className="mt-4 ml-7 flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-bold text-[#16864a] hover:bg-[#effaf3]"><Plus size={16}/> Add another pattern</button>
+            <div className="mt-4 ml-7 flex flex-wrap gap-2">
+              <button onClick={addPattern} className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-bold text-[#16864a] hover:bg-[#effaf3]"><Plus size={16}/> Add another pattern</button>
+              <button onClick={clearPatterns} className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-bold text-[#8f4b18] hover:bg-[#fff4e8]"><Eraser size={16}/> Clear all regex</button>
+            </div>
           </div>
 
           <div className="bg-[#fbfcfb] p-6">
-            <div className="mb-5 flex items-center justify-between"><div><p className="text-xs font-bold uppercase tracking-[.14em] text-[#7c5ec7]">02 · Test string</p><h2 className="mt-1 text-lg font-bold tracking-tight">Preview your matches</h2></div><span className="text-xs text-[#879088]">Optional</span></div>
+            <div className="mb-5 flex items-center justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[.14em] text-[#7c5ec7]">02 · Test string</p><h2 className="mt-1 text-lg font-bold tracking-tight">Preview your matches</h2></div><button onClick={importSampleFile} disabled={importingSample} className="btn h-9 rounded-lg border-[#d8dce0] bg-white px-3 text-xs font-bold text-[#6651a8] hover:bg-[#f3efff] disabled:text-[#8a948c]">{importingSample ? <Loader2 size={14} className="animate-spin"/> : <Upload size={14}/>} Import file</button></div>
             <textarea {...plainTextInputProps} aria-label="Sample text" value={sample} onChange={e => setSample(e.target.value)} className="textarea h-40 w-full resize-none rounded-xl border-[#d9dfda] bg-white p-4 font-mono text-sm leading-6 shadow-none focus:border-[#7c5ec7] focus:outline-2 focus:outline-[#e8e1f9]" placeholder="Paste text to test your expressions..." />
             <div className="mt-4 min-h-20 rounded-xl border border-[#e0e5e1] bg-white p-3"><div className="mb-2 flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-[#8a948c]"><span>Matches</span><span>{matches.reduce((sum, m) => sum + m.found.length, 0)} found</span></div><div className="flex flex-wrap gap-2">{matches.flatMap((m, i) => m.invalid ? [<span key={`i-${i}`} className="rounded-md bg-red-50 px-2 py-1 font-mono text-xs text-red-600">Invalid: {m.pattern}</span>] : m.found.map((found, j) => <span key={`${i}-${j}`} style={{ color: m.color, backgroundColor: `${m.color}12`, borderColor: `${m.color}32` }} className="rounded-md border px-2 py-1 font-mono text-xs">{found}</span>))}{matches.every(m => m.found.length === 0 && !m.invalid) && <span className="text-xs text-[#929b94]">No matches yet</span>}</div></div>
           </div>
