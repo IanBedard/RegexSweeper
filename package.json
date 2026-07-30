@@ -4,11 +4,13 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "tauri": "tauri",
     "dev": "tauri dev",
     "web:dev": "vite --host 127.0.0.1 --port 1420",
     "web:build": "tsc -b && vite build",
     "build": "tauri build",
     "build:web": "tsc -b && vite build",
+    "pack:msix": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/pack-msix.ps1",
     "preview": "vite preview"
   },
   "dependencies": {

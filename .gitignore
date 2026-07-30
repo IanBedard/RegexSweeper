@@ -1,5 +1,7 @@
 node_modules/
+Assets/
 dist/
+dist-msix/
 src-tauri/target/
 *.tsbuildinfo
 vite.config.js

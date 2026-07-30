@@ -67,20 +67,32 @@ src-tauri/target/release/bundle/macos/Regex Sweep.app
 src-tauri/target/release/bundle/dmg/Regex Sweep_0.1.0_aarch64.dmg
 ```
 
-On Windows, a production build creates Windows installers from a Windows build machine, typically under:
+On Windows, a production build can create a Microsoft Store-ready MSIX package from a Windows build machine or GitHub Actions runner:
 
 ```text
-src-tauri/target/release/bundle/msi/
-src-tauri/target/release/bundle/nsis/
+dist-msix/RegexSweep_0.1.0.0_x64.msix
 ```
 
 The packaged app is self-contained. Runtime terminal tools are not required.
 
 ## Windows deployment
 
-Yes, Regex Sweep can be deployed on Windows. Build it on a Windows machine or in a Windows GitHub Actions runner with Node.js, Rust, and the Tauri Windows prerequisites installed.
+Yes, Regex Sweep can be deployed on Windows. The release workflow builds a Windows MSIX with Microsoft's WinApp CLI on `windows-latest`, then uploads it as a GitHub Actions artifact.
 
-Windows users who install the packaged app do not need developer tools. Tauri uses Microsoft WebView2, which is already installed on many current Windows systems; otherwise the installer can prompt for it depending on the bundle configuration.
+For Microsoft Store submission, use the MSIX artifact instead of the MSI/EXE installer URL path. Microsoft signs MSIX packages during Store processing, so no paid code-signing certificate is needed for that Store route.
+
+To build an MSIX locally, use Windows 11 with Node.js, Rust, and the WinApp CLI installed:
+
+```powershell
+winget install Microsoft.winappcli --source winget
+npm run pack:msix
+```
+
+For local sideload testing only, you can ask the packaging script to generate a development certificate:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/pack-msix.ps1 -GenerateDevCert -InstallDevCert
+```
 
 ## Development
 
