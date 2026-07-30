@@ -26,9 +26,7 @@ type SweepResult = {
   outputPath: string
   matchesWritten: number
   filesScanned: number
-  filesSkipped: number
   affectedFiles: number
-  errorsCount: number
   exportType: string
 }
 
@@ -172,11 +170,10 @@ function App() {
         <div className="bg-[#15231a] p-5 text-sm leading-6 text-[#d9e7dc]">
           {!result && !error && <div className="flex items-center gap-2 text-[#9eb3a5]"><FileText size={16}/> Export status will appear here</div>}
           {error && <div className="flex items-start gap-2 text-[#ffb8b8]"><AlertCircle size={17} className="mt-0.5 shrink-0"/><span>{error}</span></div>}
-          {result && <div className="grid gap-3 sm:grid-cols-5">
+          {result && <div className="grid gap-3 sm:grid-cols-4">
             <div><p className="text-xs uppercase tracking-wider text-[#80a98c]">Matches</p><p className="mt-1 text-2xl font-bold text-white">{result.matchesWritten}</p></div>
             <div><p className="text-xs uppercase tracking-wider text-[#80a98c]">Files scanned</p><p className="mt-1 text-2xl font-bold text-white">{result.filesScanned}</p></div>
             <div><p className="text-xs uppercase tracking-wider text-[#80a98c]">Affected files</p><p className="mt-1 text-2xl font-bold text-white">{result.affectedFiles}</p></div>
-            <div><p className="text-xs uppercase tracking-wider text-[#80a98c]">Errors</p><p className="mt-1 text-2xl font-bold text-white">{result.errorsCount ?? result.filesSkipped}</p></div>
             <div className="sm:col-span-1"><p className="text-xs uppercase tracking-wider text-[#80a98c]">Saved</p><p className="mt-1 break-all font-mono text-xs text-[#d9e7dc]">{result.outputPath}</p></div>
           </div>}
         </div>

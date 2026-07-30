@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
+    io::ErrorKind,
     path::{Path, PathBuf},
 };
 
@@ -150,8 +151,15 @@ fn run_sweep(request: &SweepRequest) -> Result<SweepData, String> {
             continue;
         }
 
+        if is_unsupported_binary_file(path) {
+            continue;
+        }
+
         let content = match fs::read_to_string(path) {
             Ok(content) => content,
+            Err(error) if error.kind() == ErrorKind::InvalidData => {
+                continue;
+            }
             Err(error) => {
                 errors.push(FileError {
                     path: display_path(path, &root),
@@ -281,6 +289,31 @@ fn comparable_path(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
+fn is_unsupported_binary_file(path: &Path) -> bool {
+    let Some(extension) = path.extension().and_then(|value| value.to_str()) else {
+        return false;
+    };
+
+    matches!(
+        extension.to_ascii_lowercase().as_str(),
+        "pdf"
+            | "png"
+            | "jpg"
+            | "jpeg"
+            | "gif"
+            | "webp"
+            | "bmp"
+            | "ico"
+            | "tif"
+            | "tiff"
+            | "heic"
+            | "heif"
+            | "avif"
+            | "raw"
+            | "svgz"
+    )
+}
+
 fn affected_files(data: &SweepData) -> BTreeSet<String> {
     data.matches
         .iter()
@@ -306,8 +339,6 @@ fn build_html_report(data: &SweepData) -> Result<String, String> {
     let file_types = file_type_counts(data);
     let records_json = serde_json::to_string(&data.matches)
         .map_err(|error| format!("Could not serialize report rows: {error}"))?;
-    let errors_json = serde_json::to_string(&data.errors)
-        .map_err(|error| format!("Could not serialize report errors: {error}"))?;
     let file_types_json = serde_json::to_string(&file_types)
         .map_err(|error| format!("Could not serialize file types: {error}"))?;
     let patterns_json = serde_json::to_string(&data.patterns)
@@ -359,8 +390,6 @@ fn build_html_report(data: &SweepData) -> Result<String, String> {
     .path {{ max-width: 360px; word-break: break-all; }}
     .match {{ max-width: 380px; word-break: break-word; }}
     .empty {{ padding: 28px; color: #7b867e; }}
-    .errors {{ padding: 18px; display: grid; gap: 10px; }}
-    .error-row {{ border: 1px solid #f1c5c5; background: #fff5f5; border-radius: 10px; padding: 12px; color: #7a2c2c; }}
     @media (max-width: 820px) {{
       .controls {{ grid-template-columns: 1fr; }}
       .bar {{ align-items: flex-start; flex-direction: column; }}
@@ -391,7 +420,6 @@ fn build_html_report(data: &SweepData) -> Result<String, String> {
         <div class="metric"><span>Files scanned</span><strong>{files_scanned}</strong></div>
         <div class="metric"><span>Affected files</span><strong>{affected_files}</strong></div>
         <div class="metric"><span>Total matches</span><strong>{total_matches}</strong></div>
-        <div class="metric"><span>Errors</span><strong>{errors_count}</strong></div>
       </div>
     </section>
 
@@ -412,20 +440,14 @@ fn build_html_report(data: &SweepData) -> Result<String, String> {
       <div class="empty" id="empty" hidden>No rows match the current filters.</div>
     </section>
 
-    <section class="panel">
-      <div class="details"><div><span>Errors or inaccessible files</span></div></div>
-      <div class="errors" id="errors">{errors_html}</div>
-    </section>
   </main>
 
   <script type="application/json" id="rows-data">{records_json}</script>
-  <script type="application/json" id="errors-data">{errors_json}</script>
   <script type="application/json" id="file-types-data">{file_types_json}</script>
   <script type="application/json" id="patterns-data">{patterns_json}</script>
   <script>
     const byId = id => document.getElementById(id);
     const rows = JSON.parse(byId('rows-data').textContent);
-    const errors = JSON.parse(byId('errors-data').textContent);
     const fileTypes = JSON.parse(byId('file-types-data').textContent);
     const patterns = JSON.parse(byId('patterns-data').textContent);
     const extOf = path => {{
@@ -487,10 +509,6 @@ fn build_html_report(data: &SweepData) -> Result<String, String> {
       byId(id).addEventListener('change', render);
     }});
     render();
-
-    byId('errors').innerHTML = errors.length
-      ? errors.map(error => `<div class=\"error-row\"><strong>${{escapeHtml(error.path)}}</strong><br>${{escapeHtml(error.error)}}</div>`).join('')
-      : '<div class=\"empty\">No inaccessible files were reported.</div>';
   </script>
 </body>
 </html>"#,
@@ -499,13 +517,10 @@ fn build_html_report(data: &SweepData) -> Result<String, String> {
         files_scanned = data.files_scanned,
         affected_files = affected_files.len(),
         total_matches = data.matches.len(),
-        errors_count = data.errors.len(),
         patterns_html = chips_html(&data.patterns),
         file_types_html = chips_html(&file_type_chips),
         rows_html = rows_html(&data.matches),
-        errors_html = errors_html(&data.errors),
         records_json = json_for_script(&records_json),
-        errors_json = json_for_script(&errors_json),
         file_types_json = json_for_script(&file_types_json),
         patterns_json = json_for_script(&patterns_json),
     ))
@@ -557,24 +572,6 @@ fn rows_html(matches: &[MatchRecord]) -> String {
         .join("")
 }
 
-fn errors_html(errors: &[FileError]) -> String {
-    if errors.is_empty() {
-        return "<div class=\"empty\">No inaccessible files were reported.</div>".to_string();
-    }
-
-    errors
-        .iter()
-        .map(|error| {
-            format!(
-                "<div class=\"error-row\"><strong>{}</strong><br>{}</div>",
-                html_escape(&error.path),
-                html_escape(&error.error)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("")
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -583,4 +580,37 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![sweep_to_json, sweep_to_report])
         .run(tauri::generate_context!())
         .expect("error while running Regex Sweep");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_unsupported_binary_file;
+    use std::path::Path;
+
+    #[test]
+    fn unsupported_binary_files_include_pdfs_and_images() {
+        for path in [
+            "example.pdf",
+            "photo.PNG",
+            "scan.jpeg",
+            "icon.ico",
+            "image.tiff",
+            "compressed.svgz",
+        ] {
+            assert!(is_unsupported_binary_file(Path::new(path)));
+        }
+    }
+
+    #[test]
+    fn text_like_files_are_not_treated_as_unsupported_binary_files() {
+        for path in [
+            "notes.txt",
+            "src/main.rs",
+            "README.md",
+            "data.json",
+            "vector.svg",
+        ] {
+            assert!(!is_unsupported_binary_file(Path::new(path)));
+        }
+    }
 }
