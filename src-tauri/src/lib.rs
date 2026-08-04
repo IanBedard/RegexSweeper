@@ -18,6 +18,7 @@ struct SweepRequest {
     output_path: String,
     include_hidden: bool,
     ignore_case: bool,
+    include_capture_groups: bool,
     glob: Option<String>,
 }
 
@@ -43,6 +44,19 @@ struct MatchRecord {
     line: usize,
     start_column: usize,
     end_column: usize,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    capture_groups: Vec<CaptureGroup>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CaptureGroup {
+    index: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    value: String,
+    start_column: usize,
+    end_column: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -59,11 +73,13 @@ struct SweepData {
     matches: Vec<MatchRecord>,
     files_scanned: usize,
     errors: Vec<FileError>,
+    include_capture_groups: bool,
 }
 
 struct CompiledPattern {
     source: String,
     regex: Regex,
+    capture_names: Vec<Option<String>>,
 }
 
 struct FileGlob {
@@ -190,7 +206,14 @@ fn run_sweep(request: &SweepRequest) -> Result<SweepData, String> {
         };
 
         files_scanned += 1;
-        collect_matches(path, &root, &content, &patterns, &mut records);
+        collect_matches(
+            path,
+            &root,
+            &content,
+            &patterns,
+            request.include_capture_groups,
+            &mut records,
+        );
     }
 
     Ok(SweepData {
@@ -203,6 +226,7 @@ fn run_sweep(request: &SweepRequest) -> Result<SweepData, String> {
         matches: records,
         files_scanned,
         errors,
+        include_capture_groups: request.include_capture_groups,
     })
 }
 
@@ -234,6 +258,10 @@ fn compile_patterns(
 
             Ok(CompiledPattern {
                 source: pattern.to_string(),
+                capture_names: regex
+                    .capture_names()
+                    .map(|name| name.map(str::to_string))
+                    .collect(),
                 regex,
             })
         })
@@ -278,12 +306,51 @@ fn collect_matches(
     root: &Path,
     content: &str,
     patterns: &[CompiledPattern],
+    include_capture_groups: bool,
     records: &mut Vec<MatchRecord>,
 ) {
     let display_path = display_path(path, root);
 
     for (line_index, line) in content.lines().enumerate() {
         for pattern in patterns {
+            if include_capture_groups {
+                for captures in pattern.regex.captures_iter(line) {
+                    let Some(matched) = captures.get(0) else {
+                        continue;
+                    };
+
+                    let capture_groups = captures
+                        .iter()
+                        .enumerate()
+                        .skip(1)
+                        .filter_map(|(group_index, capture)| {
+                            capture.map(|capture| CaptureGroup {
+                                index: group_index,
+                                name: pattern
+                                    .capture_names
+                                    .get(group_index)
+                                    .and_then(|name| name.clone()),
+                                value: capture.as_str().to_string(),
+                                start_column: capture.start() + 1,
+                                end_column: capture.end() + 1,
+                            })
+                        })
+                        .collect();
+
+                    records.push(MatchRecord {
+                        path: display_path.clone(),
+                        pattern: pattern.source.clone(),
+                        matched_text: matched.as_str().to_string(),
+                        line: line_index + 1,
+                        start_column: matched.start() + 1,
+                        end_column: matched.end() + 1,
+                        capture_groups,
+                    });
+                }
+
+                continue;
+            }
+
             for matched in pattern.regex.find_iter(line) {
                 records.push(MatchRecord {
                     path: display_path.clone(),
@@ -292,6 +359,7 @@ fn collect_matches(
                     line: line_index + 1,
                     start_column: matched.start() + 1,
                     end_column: matched.end() + 1,
+                    capture_groups: Vec::new(),
                 });
             }
         }
@@ -409,6 +477,10 @@ fn build_html_report(data: &SweepData) -> Result<String, String> {
     td code {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: #263229; }}
     .path {{ max-width: 360px; word-break: break-all; }}
     .match {{ max-width: 380px; word-break: break-word; }}
+    .groups {{ min-width: 220px; max-width: 340px; }}
+    .group-list {{ display: flex; flex-wrap: wrap; gap: 6px; }}
+    .group-chip {{ display: inline-flex; gap: 5px; border: 1px solid #dfe4df; border-radius: 6px; background: #fafbfa; padding: 4px 6px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }}
+    .group-chip b {{ color: #667269; }}
     .empty {{ padding: 28px; color: #7b867e; }}
     @media (max-width: 820px) {{
       .controls {{ grid-template-columns: 1fr; }}
@@ -445,7 +517,7 @@ fn build_html_report(data: &SweepData) -> Result<String, String> {
 
     <section class="panel">
       <div class="controls">
-        <label><span>Search table</span><input id="q" placeholder="Filter path, regex, match text, line..." autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+        <label><span>Search table</span><input id="q" placeholder="Filter path, regex, match text, groups..." autocomplete="off" autocapitalize="none" spellcheck="false"></label>
         <label><span>Pattern</span><select id="patternFilter"><option value="">All patterns</option></select></label>
         <label><span>File type</span><select id="typeFilter"><option value="">All file types</option></select></label>
         <label><span>File path</span><select id="pathFilter"><option value="">All affected files</option></select></label>
@@ -453,7 +525,7 @@ fn build_html_report(data: &SweepData) -> Result<String, String> {
       <div class="table-status" id="tableStatus"></div>
       <div style="overflow:auto">
         <table>
-          <thead><tr><th>Path</th><th>Pattern</th><th>Match</th><th>Line</th><th>Columns</th></tr></thead>
+          <thead><tr><th>Path</th><th>Pattern</th><th>Match</th>{groups_header_html}<th>Line</th><th>Columns</th></tr></thead>
           <tbody id="rows">{rows_html}</tbody>
         </table>
       </div>
@@ -468,6 +540,7 @@ fn build_html_report(data: &SweepData) -> Result<String, String> {
   <script>
     const byId = id => document.getElementById(id);
     const rows = JSON.parse(byId('rows-data').textContent);
+    const includeCaptureGroups = {include_capture_groups};
     const fileTypes = JSON.parse(byId('file-types-data').textContent);
     const patterns = JSON.parse(byId('patterns-data').textContent);
     const extOf = path => {{
@@ -496,6 +569,14 @@ fn build_html_report(data: &SweepData) -> Result<String, String> {
     const addChips = (container, values) => {{
       container.innerHTML = values.length ? values.map(value => `<span class=\"chip\">${{escapeHtml(value)}}</span>`).join('') : '<span class=\"chip\">None</span>';
     }};
+    const groupLabel = group => group.name || `$${{group.index}}`;
+    const groupText = row => (row.captureGroups || []).map(group => `${{groupLabel(group)}}: ${{group.value}}`).join(' ');
+    const groupsHtml = row => {{
+      const groups = row.captureGroups || [];
+      if (!includeCaptureGroups) return '';
+      if (!groups.length) return '<td class=\"groups\"><span class=\"empty\">None</span></td>';
+      return `<td class=\"groups\"><div class=\"group-list\">${{groups.map(group => `<span class=\"group-chip\"><b>${{escapeHtml(groupLabel(group))}}</b><span>${{escapeHtml(group.value)}}</span></span>`).join('')}}</div></td>`;
+    }};
     addChips(byId('patterns'), patterns);
     addChips(byId('fileTypes'), Object.entries(fileTypes).map(([type, count]) => `${{type}} (${{count}})`));
     addOptions(byId('patternFilter'), unique(rows.map(row => row.pattern)));
@@ -508,7 +589,7 @@ fn build_html_report(data: &SweepData) -> Result<String, String> {
       const type = byId('typeFilter').value;
       const path = byId('pathFilter').value;
       const filtered = rows.filter(row => {{
-        const haystack = [row.path, row.pattern, row.match, row.line, row.startColumn, row.endColumn].join(' ').toLowerCase();
+        const haystack = [row.path, row.pattern, row.match, groupText(row), row.line, row.startColumn, row.endColumn].join(' ').toLowerCase();
         return (!q || haystack.includes(q)) &&
           (!pattern || row.pattern === pattern) &&
           (!type || extOf(row.path) === type) &&
@@ -518,6 +599,7 @@ fn build_html_report(data: &SweepData) -> Result<String, String> {
         <td class=\"path\"><code>${{escapeHtml(row.path)}}</code></td>
         <td><code>${{escapeHtml(row.pattern)}}</code></td>
         <td class=\"match\">${{escapeHtml(row.match)}}</td>
+        ${{groupsHtml(row)}}
         <td>${{row.line}}</td>
         <td>${{row.startColumn}}-${{row.endColumn}}</td>
       </tr>`).join('');
@@ -539,10 +621,16 @@ fn build_html_report(data: &SweepData) -> Result<String, String> {
         total_matches = data.matches.len(),
         patterns_html = chips_html(&data.patterns),
         file_types_html = chips_html(&file_type_chips),
-        rows_html = rows_html(&data.matches),
+        groups_header_html = if data.include_capture_groups {
+            "<th>Groups</th>"
+        } else {
+            ""
+        },
+        rows_html = rows_html(&data.matches, data.include_capture_groups),
         records_json = json_for_script(&records_json),
         file_types_json = json_for_script(&file_types_json),
         patterns_json = json_for_script(&patterns_json),
+        include_capture_groups = data.include_capture_groups,
     ))
 }
 
@@ -574,15 +662,16 @@ fn chips_html(values: &[String]) -> String {
         .join("")
 }
 
-fn rows_html(matches: &[MatchRecord]) -> String {
+fn rows_html(matches: &[MatchRecord], include_capture_groups: bool) -> String {
     matches
         .iter()
         .map(|record| {
             format!(
-                "<tr><td class=\"path\"><code>{}</code></td><td><code>{}</code></td><td class=\"match\">{}</td><td>{}</td><td>{}-{}</td></tr>",
+                "<tr><td class=\"path\"><code>{}</code></td><td><code>{}</code></td><td class=\"match\">{}</td>{}<td>{}</td><td>{}-{}</td></tr>",
                 html_escape(&record.path),
                 html_escape(&record.pattern),
                 html_escape(&record.matched_text),
+                groups_html(record, include_capture_groups),
                 record.line,
                 record.start_column,
                 record.end_column
@@ -590,6 +679,36 @@ fn rows_html(matches: &[MatchRecord]) -> String {
         })
         .collect::<Vec<_>>()
         .join("")
+}
+
+fn groups_html(record: &MatchRecord, include_capture_groups: bool) -> String {
+    if !include_capture_groups {
+        return String::new();
+    }
+
+    if record.capture_groups.is_empty() {
+        return "<td class=\"groups\"><span class=\"empty\">None</span></td>".to_string();
+    }
+
+    let groups = record
+        .capture_groups
+        .iter()
+        .map(|group| {
+            let label = group
+                .name
+                .as_deref()
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("${}", group.index));
+            format!(
+                "<span class=\"group-chip\"><b>{}</b><span>{}</span></span>",
+                html_escape(&label),
+                html_escape(&group.value)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+
+    format!("<td class=\"groups\"><div class=\"group-list\">{groups}</div></td>")
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -608,7 +727,7 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::is_unsupported_binary_file;
+    use super::{collect_matches, compile_patterns, is_unsupported_binary_file};
     use std::path::Path;
 
     #[test]
@@ -636,5 +755,35 @@ mod tests {
         ] {
             assert!(!is_unsupported_binary_file(Path::new(path)));
         }
+    }
+
+    #[test]
+    fn capture_groups_are_included_when_enabled() {
+        let patterns = compile_patterns(
+            &[r"First_Name: (?<first>\w+), Last_Name: (?<last>\w+)".to_string()],
+            false,
+        )
+        .expect("pattern should compile");
+        let mut records = Vec::new();
+
+        collect_matches(
+            Path::new("people.txt"),
+            Path::new(""),
+            "First_Name: Jane, Last_Name: Smith",
+            &patterns,
+            true,
+            &mut records,
+        );
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0].matched_text,
+            "First_Name: Jane, Last_Name: Smith"
+        );
+        assert_eq!(records[0].capture_groups.len(), 2);
+        assert_eq!(records[0].capture_groups[0].name.as_deref(), Some("first"));
+        assert_eq!(records[0].capture_groups[0].value, "Jane");
+        assert_eq!(records[0].capture_groups[1].name.as_deref(), Some("last"));
+        assert_eq!(records[0].capture_groups[1].value, "Smith");
     }
 }

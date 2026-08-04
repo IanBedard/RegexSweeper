@@ -23,6 +23,8 @@ import {
 } from 'lucide-react'
 
 type Pattern = { id: number; value: string }
+type PreviewGroup = { label: string; value: string }
+type PreviewMatch = { text: string; groups: PreviewGroup[] }
 
 type SweepResult = {
   outputPath: string
@@ -48,6 +50,7 @@ function App() {
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [includeHidden, setIncludeHidden] = useState(false)
   const [ignoreCase, setIgnoreCase] = useState(false)
+  const [includeCaptureGroups, setIncludeCaptureGroups] = useState(false)
   const [glob, setGlob] = useState('')
 
   const repositoryUrl = 'https://github.com/IanBedard/RegexSweeper'
@@ -58,10 +61,19 @@ function App() {
   const matches = useMemo(() => validPatterns.map((pattern, index) => {
     try {
       const flags = ignoreCase ? 'gi' : 'g'
-      const found = [...sample.matchAll(new RegExp(pattern, flags))].map(match => match[0])
+      const found: PreviewMatch[] = [...sample.matchAll(new RegExp(pattern, flags))].map(match => {
+        const numberedGroups = includeCaptureGroups
+          ? match.slice(1).flatMap((value, groupIndex) => value === undefined ? [] : [{ label: `$${groupIndex + 1}`, value }])
+          : []
+        const namedGroups = includeCaptureGroups && match.groups
+          ? Object.entries(match.groups).flatMap(([name, value]) => value === undefined ? [] : [{ label: name, value }])
+          : []
+
+        return { text: match[0], groups: [...numberedGroups, ...namedGroups] }
+      })
       return { pattern, found, color: ['#13a05a', '#805ad5', '#d97706'][index % 3] }
     } catch { return { pattern, found: [], color: '#d14343', invalid: true } }
-  }), [patterns, sample, ignoreCase])
+  }), [patterns, sample, ignoreCase, includeCaptureGroups])
 
   const updatePattern = (id: number, value: string) => setPatterns(items => items.map(item => item.id === id ? { ...item, value } : item))
   const addPattern = () => setPatterns(items => [...items, { id: Date.now(), value: '' }])
@@ -156,6 +168,7 @@ function App() {
           outputPath,
           includeHidden,
           ignoreCase,
+          includeCaptureGroups,
           glob: glob.trim() || null,
         },
       })
@@ -197,7 +210,7 @@ function App() {
           <div className="bg-[#fbfcfb] p-6">
             <div className="mb-5 flex items-center justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[.14em] text-[#7c5ec7]">02 · Test string</p><h2 className="mt-1 text-lg font-bold tracking-tight">Preview your matches</h2></div><button onClick={importSampleFile} disabled={importingSample} className="btn h-9 rounded-lg border-[#d8dce0] bg-white px-3 text-xs font-bold text-[#6651a8] hover:bg-[#f3efff] disabled:text-[#8a948c]">{importingSample ? <Loader2 size={14} className="animate-spin"/> : <Upload size={14}/>} Import file</button></div>
             <textarea {...plainTextInputProps} aria-label="Sample text" value={sample} onChange={e => setSample(e.target.value)} className="textarea h-40 w-full resize-none rounded-xl border-[#d9dfda] bg-white p-4 font-mono text-sm leading-6 shadow-none focus:border-[#7c5ec7] focus:outline-2 focus:outline-[#e8e1f9]" placeholder="Paste text to test your expressions..." />
-            <div className="mt-4 min-h-20 rounded-xl border border-[#e0e5e1] bg-white p-3"><div className="mb-2 flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-[#8a948c]"><span>Matches</span><span>{matches.reduce((sum, m) => sum + m.found.length, 0)} found</span></div><div className="flex flex-wrap gap-2">{matches.flatMap((m, i) => m.invalid ? [<span key={`i-${i}`} className="rounded-md bg-red-50 px-2 py-1 font-mono text-xs text-red-600">Invalid: {m.pattern}</span>] : m.found.map((found, j) => <span key={`${i}-${j}`} style={{ color: m.color, backgroundColor: `${m.color}12`, borderColor: `${m.color}32` }} className="rounded-md border px-2 py-1 font-mono text-xs">{found}</span>))}{matches.every(m => m.found.length === 0 && !m.invalid) && <span className="text-xs text-[#929b94]">No matches yet</span>}</div></div>
+            <div className="mt-4 min-h-20 rounded-xl border border-[#e0e5e1] bg-white p-3"><div className="mb-2 flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-[#8a948c]"><span>Matches</span><span>{matches.reduce((sum, m) => sum + m.found.length, 0)} found</span></div><div className="flex flex-wrap gap-2">{matches.flatMap((m, i) => m.invalid ? [<span key={`i-${i}`} className="rounded-md bg-red-50 px-2 py-1 font-mono text-xs text-red-600">Invalid: {m.pattern}</span>] : m.found.map((found, j) => <span key={`${i}-${j}`} style={{ color: m.color, backgroundColor: `${m.color}12`, borderColor: `${m.color}32` }} className="rounded-md border px-2 py-1 font-mono text-xs"><span>{found.text}</span>{found.groups.length > 0 && <span className="mt-1 block text-[10px] leading-4 opacity-80">{found.groups.map(group => `${group.label}: ${group.value}`).join(' · ')}</span>}</span>))}{matches.every(m => m.found.length === 0 && !m.invalid) && <span className="text-xs text-[#929b94]">No matches yet</span>}</div></div>
           </div>
         </div>
 
@@ -217,9 +230,10 @@ function App() {
           </div>}
         </div>
         {result && <div className="flex items-center gap-2 px-5 py-3 text-xs text-[#587060]"><Check size={14} className="text-[#199254]"/> {result.exportType} created successfully</div>}
-        {showAdvanced && <div className="grid gap-4 border-t border-[#e4e8e4] bg-[#fafbfa] px-5 py-4 sm:grid-cols-3">
+        {showAdvanced && <div className="grid gap-4 border-t border-[#e4e8e4] bg-[#fafbfa] px-5 py-4 sm:grid-cols-4">
           <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-[#dfe4df] bg-white p-3 text-sm"><input type="checkbox" className="checkbox checkbox-sm border-[#aab4ac] text-[#173c28]" checked={includeHidden} onChange={e => setIncludeHidden(e.target.checked)}/><span><b className="block text-[#263229]">Include hidden files</b><small className="text-[#7b867e]">Search dotfiles and hidden folders</small></span></label>
           <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-[#dfe4df] bg-white p-3 text-sm"><input type="checkbox" className="checkbox checkbox-sm border-[#aab4ac] text-[#173c28]" checked={ignoreCase} onChange={e => setIgnoreCase(e.target.checked)}/><span><b className="block text-[#263229]">Ignore letter case</b><small className="text-[#7b867e]">Applies to preview and export</small></span></label>
+          <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-[#dfe4df] bg-white p-3 text-sm"><input type="checkbox" className="checkbox checkbox-sm border-[#aab4ac] text-[#173c28]" checked={includeCaptureGroups} onChange={e => setIncludeCaptureGroups(e.target.checked)}/><span><b className="block text-[#263229]">Include regex groups</b><small className="text-[#7b867e]">Export captured submatches</small></span></label>
           <label className="rounded-xl border border-[#dfe4df] bg-white p-3 text-sm"><b className="block text-[#263229]">File glob</b><input {...plainTextInputProps} value={glob} onChange={e => setGlob(e.target.value)} className="mt-1 w-full border-0 bg-transparent font-mono text-xs outline-none" placeholder="*.ts or !node_modules/**"/></label>
         </div>}
       </section>
